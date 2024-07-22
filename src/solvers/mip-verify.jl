@@ -1,7 +1,7 @@
 const DEFAULT_PRE_ACT_BOUND::FloatType[] = 1e4
 
 @with_kw struct MIPVerify <: ForwardProp
-    optimizer = GLPK.Optimizer
+    optimizer = Gurobi.Optimizer
     pre_bound_method::Union{ForwardProp, BackwardProp, Nothing} = nothing
 end
 
@@ -61,7 +61,7 @@ function prepare_method(
     # add objective function (suppose there is only one input)
     disturbance = z - LazySets.center(batch_input[1])
     obj = symbolic_infty_norm(opt_model, disturbance)
-    @objective(opt_model, Min, obj)
+    @objective(opt_model, Min, 0)
     batch_info[:objective] = obj
 
     return batch_output, batch_info
@@ -73,10 +73,18 @@ function process_bound(
     batch_out_spec::AbstractArray,
     model_info::ModelGraph,
     batch_info::Dict,
-)::Tuple{Vector{Hyperrectangle}, Dict}
+)::Tuple{Vector{CounterExampleResult}, Dict}
     opt_model = batch_info[:opt_model]
     final_node = model_info.final_nodes[1]
     z = batch_info[final_node][:opt_vars][:z]
+
+    vars = all_variables(opt_model)
+    start_values = batch_info[:start_values]
+    if !isnothing(start_values)
+        for (var, value) in zip(vars, start_values)
+            set_start_value(var, value)
+        end
+    end
 
     function get_max_disturbance()
         if termination_status(opt_model) == OPTIMAL
@@ -120,24 +128,24 @@ function process_bound(
     # wrap maximum disturbance as a Hyperrectangle for type consistency
     batch_bound = [Hyperrectangle([0.0], [max_disturbance])]
 
-    return batch_bound, batch_info
+    if max_disturbance != Inf
+        ce = value.(batch_info[model_info.start_nodes[1]][:opt_vars][:z])
+        result = CounterExampleResult(:violated, ce)
+        batch_info[:values] = value.(vars)
+    else
+        result = CounterExampleResult(:holds)
+    end
+    return [result], batch_info
 end
 
 function check_inclusion(
     prop_method::MIPVerify,
     model::Chain,
     batch_input::AbstractArray,
-    batch_bound::Vector{Hyperrectangle},
+    result::Vector{CounterExampleResult},
     batch_out_spec::AbstractArray,
-)::Vector{AdversarialResult}
-    # obtain result according to maximum disturbance
-    max_disturbance = radius(batch_bound[1])
-    if max_disturbance == Inf
-        result = AdversarialResult(:holds)
-    else
-        result = AdversarialResult(:violated, max_disturbance)
-    end
-    return [result]
+)::Vector{CounterExampleResult}
+    return result
 end
 
 function symbolic_infty_norm(opt_model::Model, var::AbstractVector)

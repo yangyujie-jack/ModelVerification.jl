@@ -132,7 +132,8 @@ function search_branches(search_method::BFS, split_method, prop_method, problem,
                         comp_verified_ratio=false,
                         pre_split=nothing, 
                         verbose=false,
-                        time_out=nothing)
+                        time_out=nothing,
+                        start_values=nothing)
 
     @assert !comp_verified_ratio || isa(split_method, Bisect) # comp_verified_ratio is only supported for Bisect
     to = get_timer("Shared")
@@ -153,8 +154,8 @@ function search_branches(search_method::BFS, split_method, prop_method, problem,
         end
         verbose && println("iter: ", iter, "   remaining branches: ", length(branches))
         length(branches) == 0 && break
-        branch = popfirst!(branches)
-        push!(batch_branch, branch) 
+        push_num = min(search_method.batch_size - length(batch_branch), length(branches))
+        push!(batch_branch, splice!(branches, 1:push_num)...)
         
         if length(batch_branch) >= search_method.batch_size || length(branches) == 0
             
@@ -162,14 +163,15 @@ function search_branches(search_method::BFS, split_method, prop_method, problem,
             
             @timeit to "prepare_method" batch_out_spec, batch_info = prepare_method(prop_method, batch_input, batch_output, batch_inheritance, model_info)
             @timeit to "propagate" batch_bound, batch_info = propagate(prop_method, model_info, batch_info)
+            batch_info[:start_values] = start_values
             @timeit to "process_bound" batch_bound, batch_info = process_bound(prop_method, batch_bound, batch_out_spec, model_info, batch_info)
             @timeit to "check_inclusion" batch_result = check_inclusion(prop_method, problem.Flux_model, batch_input, batch_bound, batch_out_spec)
             
             for i in eachindex(batch_input)
-                batch_result[i].status == :holds && collect_bound && (push!(verified_bound, batch_bound[i]))
+                # batch_result[i].status == :holds && collect_bound && (push!(verified_bound, batch_bound[i]))
                 batch_result[i].status == :holds && comp_verified_ratio && isa(split_method, Bisect) && (verified_ratio += batch_ratio[i])
                 batch_result[i].status == :holds && continue
-                batch_result[i].status == :violated && !comp_verified_ratio && (return batch_result[i], verified_bound, verified_ratio)
+                batch_result[i].status == :violated && !comp_verified_ratio && (return batch_result[i], batch_info, verified_ratio)
                 # batch_result[i].status == :unknown
                 inheritance = get_inheritance(prop_method, batch_info, i, model_info)
                 @timeit to "split_branch" sub_branches = split_branch(split_method, problem.Flux_model, batch_input[i], batch_output[i], inheritance, model_info, batch_info, batch_ratio[i])
