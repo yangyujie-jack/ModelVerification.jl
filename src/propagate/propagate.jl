@@ -59,12 +59,12 @@ function propagate(prop_method::PropMethod, model_info, batch_info)
         # println("prop: ", node, "    prev: ", prev_nodes(prop_method, model_info, node))
         
         enqueue_connected!(prop_method, model_info, queue, visit_cnt, node)
-        @timeit to string(typeof(model_info.node_layer[node])) batch_bound = propagate_layer_method(prop_method, model_info, batch_info, node)
-        # if num_prevs(prop_method, model_info, node) >= 2   # If there are more than two previous nodes connecting to the `node`.
-        #     @timeit to string(typeof(model_info.node_layer[node])) batch_bound = propagate_layer_method(prop_method, model_info, batch_info, node)
-        # else
-        #     @timeit to string(typeof(model_info.node_layer[node])) batch_bound = propagate_layer_method(prop_method, model_info, batch_info, node)
-        # end
+
+        if num_prevs(prop_method, model_info, node) >= 2   # If there are more than two previous nodes connecting to the `node`.
+            @timeit to string(typeof(model_info.node_layer[node])) batch_bound = propagate_skip_method(prop_method, model_info, batch_info, node)
+        else
+            @timeit to string(typeof(model_info.node_layer[node])) batch_bound = propagate_layer_method(prop_method, model_info, batch_info, node)
+        end
         # if length(prev_nodes(prop_method, model_info, node)) > 0
         #     @show prev_nodes(prop_method, model_info, node)[1], node
         #     @show batch_info[prev_nodes(prop_method, model_info, node)[1]][:bound] == batch_bound
@@ -305,21 +305,10 @@ is invoked.
     layer operation.
 """
 function propagate_layer_method(prop_method::ForwardProp, model_info, batch_info, node)
-    if length(model_info.node_prevs[node]) >= 2
-        input_nodes = model_info.node_prevs[node]
-        batch_bounds = [batch_info[node][:bound] for node in input_nodes]
-        # [reach x batch] x parallel_dim
-        batch_bound = propagate_parallel_batch(prop_method, model_info.node_layer[node], batch_bounds, batch_info)
-    elseif length(model_info.node_prevs[node]) == 2
-        input_node1 = model_info.node_prevs[node][1]
-        input_node2 = model_info.node_prevs[node][2]
-        batch_bound1 = batch_info[input_node1][:bound]
-        batch_bound2 = batch_info[input_node2][:bound]
-        batch_bound = propagate_skip_batch(prop_method, model_info.node_layer[node], batch_bound1, batch_bound2, batch_info)
-    elseif length(model_info.node_prevs[node]) == 1
+    if length(model_info.node_prevs[node]) != 0
         input_node = model_info.node_prevs[node][1]
         batch_bound = propagate_layer_batch(prop_method, model_info.node_layer[node], batch_info[input_node][:bound], batch_info)
-    elseif length(model_info.node_prevs[node]) == 0 #the node is start: use the pre-defined bound to start, and update the bound of the current node
+    else #the node is start: use the pre-defined bound to start, and update the bound of the current node
         batch_bound = propagate_layer_batch(prop_method, model_info.node_layer[node], batch_info[node][:bound], batch_info)
     end
     return batch_bound
